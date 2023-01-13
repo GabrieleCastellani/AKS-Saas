@@ -1,0 +1,107 @@
+
+az group create \
+    --name aks-test \
+    --location northeurope
+
+az aks create \
+    --resource-group aks-test \
+    --name saas-aks-01 \
+    --load-balancer-sku standard \
+    --enable-private-cluster \
+    --network-plugin azure \
+    --docker-bridge-address 172.17.0.1/16 \
+    --dns-service-ip 10.2.0.10 \
+    --service-cidr 10.2.0.0/24 \
+    --node-resource-group saas-aks-01-nodes \
+    --generate-ssh-keys 
+
+
+az vm create \
+    --resource-group aks-test \
+    --name jumpboxvm \
+    --image Win2022Datacenter \
+    --public-ip-sku Standard \
+    --admin-username gabrielc \
+    --admin-password A4hbEfrTRbI8.A4hbEfrTRbI8 \
+    --size Standard_B2s \
+    --vnet-name managmenetvnet \
+    --subnet Subnet1 \
+    --nsg jumpboxnsg \
+    --public-ip-address jumpboxpip 
+
+id=$(az aks list \
+    --resource-group aks-test \
+    --query '[].[id]' \
+    --output tsv)
+
+
+az network private-endpoint create --connection-name myConnection \
+    --name myPrivateEndpoint \
+    --private-connection-resource-id $id \
+    --resource-group aks-test \
+    --subnet Subnet1 \
+    --group-id managment \
+    --vnet-name managmenetvnet     
+
+# Get the network interface ID of the private endpoint
+endpointnetworkid=$(az network private-endpoint show \
+    --name myPrivateEndpoint \
+    --resource-group aks-test \
+    --query networkInterfaces[0].id \
+    --output tsv)
+
+# Get the private IP address of the network interface
+endpointip=$(az network nic show \
+    --ids $endpointnetworkid \
+    --query ipConfigurations[0].privateIpAddress \
+    --output tsv)
+
+#get the name of the private dns zone in the aks cluster resource group
+privatednszone=$(az network private-dns zone list \
+    --resource-group saas-aks-01-nodes \
+    --query '[].[name]' \
+    --output tsv)
+
+#create a private dns zone
+az network private-dns zone create \
+    --resource-group aks-test \
+    --name $privatednszone
+
+#get a record from the private dns zone
+privatednszoneprefix=$(az network private-dns record-set a list \
+    --resource-group saas-aks-01-nodes \
+    --zone-name $privatednszone \
+    --query '[].[name]' \
+    --output tsv)
+
+#add the private ip address to the private dns zone
+az network private-dns record-set a add-record \
+    --resource-group aks-test \
+    --zone-name $privatednszone \
+    --record-set-name $privatednszoneprefix \
+    --ipv4-address $endpointip
+
+#link the private dns zone to the vnet
+az network private-dns link vnet create \
+    --resource-group aks-test \
+    --name $privatednszone \
+    --zone-name $privatednszone \
+    --virtual-network managmenetvnet \
+    --registration-enabled false
+
+#reboot the jumpbox
+az vm restart \
+    --resource-group aks-test \
+    --name jumpboxvm
+
+#get kubectl
+az aks install-cli
+
+#connect to aks cluster
+az aks get-credentials \
+    --resource-group aks-test \
+    --name saas-aks-01 \
+    --admin
+
+#get running nodes in the cluster
+kubectl get nodes
