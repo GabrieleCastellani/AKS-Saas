@@ -13,6 +13,9 @@ az aks create \
     --dns-service-ip 10.2.0.10 \
     --service-cidr 10.2.0.0/24 \
     --node-resource-group saas-aks-01-nodes \
+    --node-count 1 \
+    --node-vm-size Standard_B2s \
+    --node-osdisk-size 32
     --generate-ssh-keys 
 
 
